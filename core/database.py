@@ -56,9 +56,23 @@ CREATE TABLE IF NOT EXISTS investment_records (
     stage TEXT,
     amount TEXT,
     invested_date TEXT,
+    event_url TEXT,
+    company_desc TEXT,
     source TEXT DEFAULT 'itjuzi',
     FOREIGN KEY (institution_id) REFERENCES institutions(id),
     UNIQUE(institution_id, company_name, invested_date)
+);
+
+CREATE TABLE IF NOT EXISTS project_funding_rounds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    round_date TEXT,
+    round_type TEXT,
+    amount TEXT,
+    investors TEXT,
+    source TEXT DEFAULT 'itjuzi',
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    UNIQUE(project_id, round_date, round_type)
 );
 """
 
@@ -75,9 +89,34 @@ def _conn(db_path):
     finally:
         conn.close()
 
+def _migrate(conn):
+    for ddl in [
+        "ALTER TABLE investment_records ADD COLUMN event_url TEXT",
+        "ALTER TABLE investment_records ADD COLUMN company_desc TEXT",
+        "ALTER TABLE projects ADD COLUMN report_json TEXT",
+        "ALTER TABLE projects ADD COLUMN report_generated_at TEXT",
+        """CREATE TABLE IF NOT EXISTS project_funding_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            round_date TEXT,
+            round_type TEXT,
+            amount TEXT,
+            investors TEXT,
+            source TEXT DEFAULT 'itjuzi',
+            FOREIGN KEY (project_id) REFERENCES projects(id),
+            UNIQUE(project_id, round_date, round_type)
+        )""",
+    ]:
+        try:
+            conn.execute(ddl)
+        except Exception:
+            pass
+
+
 def init_db(db_path):
     with _conn(db_path) as conn:
         conn.executescript(CREATE_TABLES_SQL)
+        _migrate(conn)
 
 def insert_project(db_path, **kwargs) -> int:
     fields = {k: v for k, v in kwargs.items()}
@@ -168,3 +207,59 @@ def list_investment_records(db_path, institution_id) -> list:
             (institution_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def list_records_missing_desc(db_path, institution_id) -> list:
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM investment_records WHERE institution_id = ? "
+            "AND (company_desc IS NULL OR company_desc = '') "
+            "AND (event_url IS NOT NULL AND event_url != '') "
+            "ORDER BY invested_date DESC",
+            (institution_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_investment_record_desc(db_path, record_id: int, company_desc: str):
+    with _conn(db_path) as conn:
+        conn.execute(
+            "UPDATE investment_records SET company_desc = ? WHERE id = ?",
+            (company_desc, record_id)
+        )
+
+
+def upsert_project_report(db_path, project_id: int, report_json: str):
+    with _conn(db_path) as conn:
+        conn.execute(
+            "UPDATE projects SET report_json = ?, report_generated_at = ?, updated_at = ? WHERE id = ?",
+            (report_json, datetime.now().isoformat(), datetime.now().isoformat(), project_id)
+        )
+
+
+def insert_funding_round(db_path, **kwargs):
+    fields = {k: v for k, v in kwargs.items()}
+    cols = ", ".join(fields.keys())
+    placeholders = ", ".join("?" * len(fields))
+    with _conn(db_path) as conn:
+        conn.execute(
+            f"INSERT OR IGNORE INTO project_funding_rounds ({cols}) VALUES ({placeholders})",
+            list(fields.values())
+        )
+
+
+def list_funding_rounds(db_path, project_id: int) -> list:
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM project_funding_rounds WHERE project_id = ? ORDER BY round_date DESC",
+            (project_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_project_funding_rounds(db_path, project_id: int):
+    with _conn(db_path) as conn:
+        conn.execute(
+            "DELETE FROM project_funding_rounds WHERE project_id = ?",
+            (project_id,)
+        )

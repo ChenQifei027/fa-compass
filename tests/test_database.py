@@ -1,9 +1,12 @@
 # tests/test_database.py
+import json
 import pytest
 from core.database import init_db, insert_project, get_project, list_projects, \
     insert_institution, get_institution, list_institutions, \
     insert_investment_record, list_investment_records, \
-    update_project, update_institution, delete_project, delete_institution
+    update_project, update_institution, delete_project, delete_institution, \
+    upsert_project_report, insert_funding_round, list_funding_rounds, \
+    delete_project_funding_rounds
 
 @pytest.fixture
 def db(tmp_path):
@@ -75,3 +78,56 @@ def test_no_duplicate_investment_records(db):
                               invested_date="2018-01-01", source="itjuzi")
     records = list_investment_records(db, iid)
     assert len(records) == 1
+
+
+def test_upsert_project_report_sets_fields(db):
+    pid = insert_project(db, name="Test Co")
+    upsert_project_report(db, pid, '{"founded_year":"2020"}')
+    p = get_project(db, pid)
+    assert p["report_json"] == '{"founded_year":"2020"}'
+    assert p["report_generated_at"] is not None
+
+
+def test_upsert_project_report_overwrites(db):
+    pid = insert_project(db, name="Test Co")
+    upsert_project_report(db, pid, '{"founded_year":"2020"}')
+    upsert_project_report(db, pid, '{"founded_year":"2021"}')
+    p = get_project(db, pid)
+    assert json.loads(p["report_json"])["founded_year"] == "2021"
+
+
+def test_insert_and_list_funding_rounds(db):
+    pid = insert_project(db, name="Test Co")
+    insert_funding_round(db, project_id=pid, round_date="2023-01-01",
+                         round_type="A轮", amount="数千万", investors="红杉")
+    rows = list_funding_rounds(db, pid)
+    assert len(rows) == 1
+    assert rows[0]["round_type"] == "A轮"
+
+
+def test_insert_funding_round_deduplication(db):
+    pid = insert_project(db, name="Test Co")
+    insert_funding_round(db, project_id=pid, round_date="2023-01-01",
+                         round_type="A轮", amount="数千万", investors="红杉")
+    insert_funding_round(db, project_id=pid, round_date="2023-01-01",
+                         round_type="A轮", amount="不同金额", investors="不同")
+    rows = list_funding_rounds(db, pid)
+    assert len(rows) == 1
+
+
+def test_delete_project_funding_rounds(db):
+    pid = insert_project(db, name="Test Co")
+    insert_funding_round(db, project_id=pid, round_date="2023-01-01",
+                         round_type="A轮", amount="数千万", investors="红杉")
+    delete_project_funding_rounds(db, pid)
+    assert list_funding_rounds(db, pid) == []
+
+
+def test_list_funding_rounds_ordered_desc(db):
+    pid = insert_project(db, name="Test Co")
+    insert_funding_round(db, project_id=pid, round_date="2020-01-01",
+                         round_type="Pre-A轮", amount="x", investors="x")
+    insert_funding_round(db, project_id=pid, round_date="2023-06-01",
+                         round_type="B轮", amount="y", investors="y")
+    rows = list_funding_rounds(db, pid)
+    assert rows[0]["round_date"] == "2023-06-01"
