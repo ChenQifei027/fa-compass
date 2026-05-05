@@ -60,7 +60,7 @@ def extract_project_info(text: str, api_key: str = "") -> dict:
                 "location": "", "description": "", "highlights": "", "financing_need": ""}
     return {**defaults, **data}
 
-REPORT_PROMPT = """从以下 BP 文本中提取项目基本信息，以 JSON 返回：
+REPORT_PROMPT = """你是一名专业的投资 FA 助手。从以下 BP 文本中提取项目基本信息，以 JSON 返回：
 - founded_year: 成立时间
 - headquarters: 总部/注册地
 - sector: 领域赛道（细化描述）
