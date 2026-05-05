@@ -59,3 +59,29 @@ def extract_project_info(text: str, api_key: str = "") -> dict:
     defaults = {"name": "", "sector": "", "sub_sector": "", "stage": "",
                 "location": "", "description": "", "highlights": "", "financing_need": ""}
     return {**defaults, **data}
+
+REPORT_PROMPT = """从以下 BP 文本中提取项目基本信息，以 JSON 返回：
+- founded_year: 成立时间
+- headquarters: 总部/注册地
+- sector: 领域赛道（细化描述）
+- main_products: 主要产品或服务
+- team: 核心团队成员及背景
+- customers: 主要客户或合作方
+
+只返回 JSON，字段不存在则返回空字符串。
+
+BP 文本：
+{text}"""
+
+
+def extract_report_info(text: str) -> dict:
+    from core.llm import call_llm
+    raw = call_llm(REPORT_PROMPT.format(text=text[:8000])).strip()
+    raw = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+    defaults = {"founded_year": "", "headquarters": "", "sector": "",
+                "main_products": "", "team": "", "customers": ""}
+    try:
+        data = json.loads(raw)
+        return {**defaults, **{k: v for k, v in data.items() if k in defaults}}
+    except json.JSONDecodeError:
+        return defaults

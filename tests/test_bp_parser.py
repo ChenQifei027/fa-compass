@@ -1,7 +1,7 @@
 # tests/test_bp_parser.py
 import pytest
 from unittest.mock import patch, MagicMock
-from core.bp_parser import extract_text_from_pdf, extract_text_from_pptx, extract_project_info
+from core.bp_parser import extract_text_from_pdf, extract_text_from_pptx, extract_project_info, extract_report_info
 
 def test_extract_text_from_pdf(tmp_path):
     fake_pdf = tmp_path / "test.pdf"
@@ -35,3 +35,40 @@ def test_extract_project_info_handles_partial_extraction(mocker):
     result = extract_project_info("短文本")
     assert result.get("sub_sector", "") == ""
     assert result["sector"] == "AI"
+
+
+def test_extract_report_info_returns_six_fields(mocker):
+    fake_response = '{"founded_year":"2018年","headquarters":"北京","sector":"先进制造","main_products":"工业质检","team":"张三，CEO","customers":"富士康"}'
+    mocker.patch("core.llm.call_llm", return_value=fake_response)
+    result = extract_report_info("some bp text")
+    assert result["founded_year"] == "2018年"
+    assert result["headquarters"] == "北京"
+    assert result["sector"] == "先进制造"
+    assert result["main_products"] == "工业质检"
+    assert result["team"] == "张三，CEO"
+    assert result["customers"] == "富士康"
+
+
+def test_extract_report_info_defaults_missing_fields(mocker):
+    fake_response = '{"founded_year":"2020年"}'
+    mocker.patch("core.llm.call_llm", return_value=fake_response)
+    result = extract_report_info("text")
+    assert result["headquarters"] == ""
+    assert result["sector"] == ""
+    assert result["main_products"] == ""
+    assert result["team"] == ""
+    assert result["customers"] == ""
+
+
+def test_extract_report_info_handles_json_in_markdown(mocker):
+    fake_response = '```json\n{"founded_year":"2019年","headquarters":"上海","sector":"AI","main_products":"x","team":"y","customers":"z"}\n```'
+    mocker.patch("core.llm.call_llm", return_value=fake_response)
+    result = extract_report_info("text")
+    assert result["founded_year"] == "2019年"
+
+
+def test_extract_report_info_handles_bad_json(mocker):
+    mocker.patch("core.llm.call_llm", return_value="not json at all")
+    result = extract_report_info("text")
+    assert result == {"founded_year": "", "headquarters": "", "sector": "",
+                      "main_products": "", "team": "", "customers": ""}
