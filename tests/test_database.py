@@ -6,7 +6,7 @@ from core.database import init_db, insert_project, get_project, list_projects, \
     insert_investment_record, list_investment_records, \
     update_project, update_institution, delete_project, delete_institution, \
     upsert_project_report, insert_funding_round, list_funding_rounds, \
-    delete_project_funding_rounds
+    delete_project_funding_rounds, upsert_project_research
 
 @pytest.fixture
 def db(tmp_path):
@@ -145,3 +145,27 @@ def test_delete_project_cascades_funding_rounds(db):
     delete_project(db, pid)
     assert list_funding_rounds(db, pid) == []
     assert get_project(db, pid) is None
+
+
+def test_upsert_project_research_writes_json(db):
+    pid = insert_project(db, name="绵存科技", sector="硬件")
+    research = '{"industry_overview": "SSD存储行业..."}'
+    upsert_project_research(db, pid, research)
+    p = get_project(db, pid)
+    assert p["research_json"] == research
+    assert p["research_generated_at"] is not None
+
+
+def test_upsert_project_research_overwrites(db):
+    pid = insert_project(db, name="绵存科技", sector="硬件")
+    upsert_project_research(db, pid, '{"industry_overview": "first"}')
+    upsert_project_research(db, pid, '{"industry_overview": "second"}')
+    p = get_project(db, pid)
+    import json
+    assert json.loads(p["research_json"])["industry_overview"] == "second"
+
+
+def test_upsert_project_research_missing_project(db):
+    import pytest
+    with pytest.raises(ValueError, match="project 999 not found"):
+        upsert_project_research(db, 999, '{}')

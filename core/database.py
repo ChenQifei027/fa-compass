@@ -95,6 +95,8 @@ def _migrate(conn):
         "ALTER TABLE investment_records ADD COLUMN company_desc TEXT",
         "ALTER TABLE projects ADD COLUMN report_json TEXT",
         "ALTER TABLE projects ADD COLUMN report_generated_at TEXT",
+        "ALTER TABLE projects ADD COLUMN research_json TEXT",
+        "ALTER TABLE projects ADD COLUMN research_generated_at TEXT",
     ]:
         try:
             conn.execute(ddl)
@@ -226,6 +228,17 @@ def upsert_project_report(db_path, project_id: int, report_json: str):
         cur = conn.execute(
             "UPDATE projects SET report_json = ?, report_generated_at = ?, updated_at = ? WHERE id = ?",
             (report_json, now, now, project_id)
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"project {project_id} not found")
+
+
+def upsert_project_research(db_path, project_id: int, research_json: str):
+    now = datetime.now().isoformat()
+    with _conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE projects SET research_json = ?, research_generated_at = ?, updated_at = ? WHERE id = ?",
+            (research_json, now, now, project_id)
         )
         if cur.rowcount == 0:
             raise ValueError(f"project {project_id} not found")
