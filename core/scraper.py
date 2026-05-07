@@ -39,22 +39,21 @@ for c in cookies:
 """
 
 
+_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+_STAGE_RE = re.compile(r'轮|IPO|三板|挂牌|上市|战略|种子|天使|未披露|未透露')
+_AMOUNT_RE = re.compile(r'^\d|^未披露|^未透露|亿|万')
+
+
 def _is_valid_record(rec: dict) -> bool:
     """过滤明显不是投资事件的行（新闻区块、统计数字等）。"""
-    date_re = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-    stage_kw = re.compile(r'轮|IPO|三板|挂牌|上市|战略|种子|天使')
-    # sector 是日期 → 新闻动态区块误命中
-    if date_re.match(rec.get("sector", "")):
+    if _DATE_RE.match(rec.get("sector", "")):
         return False
-    # amount 是日期 → 同上
-    if date_re.match(rec.get("amount", "")):
+    if _DATE_RE.match(rec.get("amount", "")):
         return False
-    # company_name 超长 → 新闻标题
     if len(rec.get("company_name", "")) > 20:
         return False
-    # stage 既不含轮次关键词也不含"未透露/未披露" → 统计数字或其他垃圾
     stage = rec.get("stage", "")
-    if stage and not stage_kw.search(stage) and not re.search(r'透露|披露', stage):
+    if stage and not _STAGE_RE.search(stage):
         return False
     return True
 
@@ -73,29 +72,40 @@ def _parse_sectors_from_text(lines: list) -> str:
 
 
 def _parse_investment_records(lines: list) -> list:
-    """从页面文本行中解析投资事件记录。"""
+    """从页面文本行中解析投资事件记录。
+
+    IT桔子投资事件表格格式：日期行后跟若干字段行，顺序大致为
+    公司名 → 行业 → 轮次 → 金额，但行数不固定（有时缺行、有时多行）。
+    策略：以日期行为锚点，向后扫描至下一个日期行，从窗口内识别各字段。
+    """
     records = []
-    i = 0
-    date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-    while i < len(lines):
-        if date_pattern.match(lines[i]):
-            # 格式: 日期 / 公司名 / 行业 / 轮次 / 金额 / 详情
-            if i + 4 < len(lines):
-                rec = {
-                    "invested_date": lines[i],
-                    "company_name":  lines[i+1] if i+1 < len(lines) else "",
-                    "sector":        lines[i+2] if i+2 < len(lines) else "",
-                    "stage":         lines[i+3] if i+3 < len(lines) else "",
-                    "amount":        lines[i+4] if i+4 < len(lines) else "",
-                }
-                # 跳过「详情」行
-                skip = 5
-                if i+5 < len(lines) and lines[i+5] == "详情":
-                    skip = 6
-                records.append(rec)
-                i += skip
+    date_positions = [i for i, ln in enumerate(lines) if _DATE_RE.match(ln)]
+
+    for idx, pos in enumerate(date_positions):
+        end = date_positions[idx + 1] if idx + 1 < len(date_positions) else pos + 10
+        window = lines[pos + 1: min(end, pos + 10)]
+
+        rec = {"invested_date": lines[pos], "company_name": "", "sector": "",
+               "stage": "", "amount": ""}
+
+        for line in window:
+            if line in ("详情", "反馈", "举报", "纠错", "更多"):
                 continue
-        i += 1
+            # 轮次识别（优先，因为轮次特征最明显）
+            if not rec["stage"] and _STAGE_RE.search(line) and len(line) <= 15:
+                rec["stage"] = line
+            # 金额识别
+            elif not rec["amount"] and _AMOUNT_RE.match(line) and len(line) <= 20:
+                rec["amount"] = line
+            # 公司名（非日期、非长文本、排在前面）
+            elif not rec["company_name"] and len(line) <= 20 and not _DATE_RE.match(line):
+                rec["company_name"] = line
+            # 行业（公司名已有，还没填行业）
+            elif rec["company_name"] and not rec["sector"] and not _DATE_RE.match(line) and len(line) <= 15:
+                rec["sector"] = line
+
+        records.append(rec)
+
     return [r for r in records if _is_valid_record(r)]
 
 
@@ -129,6 +139,95 @@ def _parse_company_funding_from_text(lines: list) -> list:
         })
         i = j
     return rounds
+
+
+def _parse_sector_search_results(page_text: str, company_names: list) -> list:
+    """从 IT桔子 搜索结果页文本中提取公司列表及融资信息。
+    以 company_names 作为锚点，向后扫描最多8行提取轮次/金额/日期。
+    """
+    lines = [ln.strip() for ln in page_text.split("\n") if ln.strip()]
+    name_set = set(company_names)
+    results = []
+
+    for i, line in enumerate(lines):
+        if line not in name_set:
+            continue
+        rec = {"name": line, "stage": "", "amount": "", "date": ""}
+        for wl in lines[i + 1: i + 9]:
+            if not rec["stage"] and _STAGE_RE.search(wl) and len(wl) <= 15:
+                rec["stage"] = wl
+            elif not rec["amount"] and _AMOUNT_RE.match(wl) and len(wl) <= 20:
+                rec["amount"] = wl
+            elif not rec["date"] and _DATE_RE.match(wl):
+                rec["date"] = wl
+        results.append(rec)
+        if len(results) >= 15:
+            break
+
+    return results
+
+
+def scrape_sector_companies(keyword: str, state_path: str) -> list:
+    """在 IT桔子 搜索同赛道公司，返回最多15条 {"name","stage","amount","date"}。
+    搜索失败或无结果时返回空列表（调用方降级为纯 LLM 生成）。
+    """
+    time.sleep(random.uniform(0.5, 1.2))
+    try:
+        cookies = _get_chrome_cookies()
+        js_company_links = json.dumps(
+            'Array.from(document.querySelectorAll("a[href]"))'
+            '.map(l=>({href:l.getAttribute("href"),text:l.innerText.trim()}))'
+            '.filter(x=>x.href&&/\\/company\\/\\d+/.test(x.href)'
+            '&&x.text&&x.text.length>1&&x.text.length<=30)'
+        )
+        js_text = json.dumps("document.body.innerText")
+
+        script = f"""
+import json, time
+{_inject_cookies_script(cookies)}
+ensure_real_tab()
+
+goto_url("https://www.itjuzi.com/search?data=" + {json.dumps(quote(keyword))})
+wait_for_network_idle(timeout=15)
+time.sleep(3)
+
+for _ in range(5):
+    js("window.scrollBy(0,600)")
+    time.sleep(0.3)
+wait_for_network_idle(timeout=8)
+
+links = js({js_company_links}) or []
+page_text = js({js_text}) or ""
+print(json.dumps({{"links": links, "page_text": page_text}}, ensure_ascii=False))
+"""
+        result = subprocess.run(
+            [HARNESS_BIN, "-c", script],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            print(f"[scraper] sector search 错误: {result.stderr[-300:]}")
+            return []
+
+        data = None
+        for line in reversed(result.stdout.strip().splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                    break
+                except Exception:
+                    continue
+
+        if not data:
+            return []
+
+        company_names = [ln.get("text", "") for ln in data.get("links", []) if ln.get("text")]
+        page_text = data.get("page_text", "")
+        return _parse_sector_search_results(page_text, company_names)
+
+    except Exception as e:
+        print(f"[scraper] scrape_sector_companies 失败 {keyword}: {e}")
+        return []
 
 
 def scrape_company_funding(company_name: str, state_path: str) -> list:
@@ -205,7 +304,7 @@ else:
             return []
 
         page_text = data.get("page_text", "")
-        lines = [l.strip() for l in page_text.split("\n") if l.strip()]
+        lines = [ln.strip() for ln in page_text.split("\n") if ln.strip()]
         return _parse_company_funding_from_text(lines)
 
     except Exception as e:
@@ -314,15 +413,38 @@ else:
     inst_info = {{}}
     try:
         nd = json.loads(nuxt_str)
-        d = nd.get("data",[{{}}])[0].get("data",{{}})
-        inst_info = {{
-            "website":          d.get("url",""),
-            "founded_year":     str(d.get("year","")) if d.get("year") else "",
-            "aum":              (str(d.get("capital_rmb",""))+"亿人民币") if d.get("capital_rmb") else "",
-            "key_partners":     ",".join(g.get("name","") for g in (d.get("gp_info") or []) if g.get("name")),
-            "preferred_sectors":    ",".join(c2.get("name","") for c2 in (d.get("invse_cat_list") or []) if c2.get("name")),
-            "preferred_stages":     ",".join(r2.get("name","").split("(")[0] for r2 in (d.get("investment_round") or [])),
-        }}
+        # 尝试多种 NUXT 数据路径
+        d = {{}}
+        candidates = []
+        # 路径1: data[0].data (旧版)
+        try: candidates.append(nd.get("data",[{{}}])[0].get("data",{{}}))
+        except Exception: pass
+        # 路径2: state 下所有 key 中找含 invse_cat_list / investment_round 的对象
+        state = nd.get("state", {{}})
+        for v in (state.values() if isinstance(state, dict) else []):
+            if isinstance(v, dict) and ("invse_cat_list" in v or "gp_info" in v or "investment_round" in v):
+                candidates.append(v)
+            elif isinstance(v, dict):
+                inner = v.get("data", {{}})
+                if isinstance(inner, dict) and ("invse_cat_list" in inner or "gp_info" in inner):
+                    candidates.append(inner)
+        # 路径3: 直接顶层
+        if "invse_cat_list" in nd or "gp_info" in nd:
+            candidates.append(nd)
+        # 选第一个有有效数据的候选
+        for c in candidates:
+            if c and isinstance(c, dict) and any(c.get(k) for k in ("invse_cat_list","gp_info","investment_round","url","year")):
+                d = c
+                break
+        if d:
+            inst_info = {{
+                "website":           d.get("url",""),
+                "founded_year":      str(d.get("year","")) if d.get("year") else "",
+                "aum":               (str(d.get("capital_rmb",""))+"亿人民币") if d.get("capital_rmb") else "",
+                "key_partners":      ",".join(g.get("name","") for g in (d.get("gp_info") or []) if g.get("name")),
+                "preferred_sectors": ",".join(c2.get("name","") for c2 in (d.get("invse_cat_list") or []) if c2.get("name")),
+                "preferred_stages":  ",".join(r2.get("name","").split("(")[0].strip() for r2 in (d.get("investment_round") or []) if r2.get("name")),
+            }}
     except Exception:
         pass
 
@@ -363,7 +485,7 @@ else:
         dom_sectors = data.get("dom_sectors", [])
 
         # 从页面文本解析投资记录
-        lines = [l.strip() for l in page_text.split("\n") if l.strip()]
+        lines = [ln.strip() for ln in page_text.split("\n") if ln.strip()]
         records = _parse_investment_records(lines)
 
         # 若 NUXT 未给出 preferred_sectors，用 DOM 提取的标签补全
