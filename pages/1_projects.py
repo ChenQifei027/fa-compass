@@ -10,15 +10,17 @@ from core.database import (
     update_project, delete_project,
     upsert_project_report, insert_funding_round,
     list_funding_rounds, delete_project_funding_rounds,
+    upsert_project_research,
 )
 from core.bp_parser import extract_text_from_file, extract_project_info, extract_report_info
-from core.scraper import scrape_company_funding
+from core.scraper import scrape_company_funding, scrape_sector_companies
+from core.researcher import generate_industry_research
+from core.llm import llm_is_configured
 
 load_dotenv()
 DB_PATH = os.getenv("DB_PATH", "data/fa_matching.db")
 BP_DIR = Path(os.getenv("BP_DIR", "data/bps"))
 BROWSER_STATE = os.getenv("BROWSER_STATE", "")
-from core.llm import llm_is_configured
 
 init_db(DB_PATH)
 BP_DIR.mkdir(parents=True, exist_ok=True)
@@ -144,6 +146,138 @@ def _render_report_panel(db_path, project, browser_state):
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def _render_research_panel(db_path, project, browser_state):
+    import pandas as pd
+
+    pid = project["id"]
+    has_cache = bool(project.get("research_generated_at"))
+
+    title_col, close_col, export_col, regen_col = st.columns([5, 1, 2, 2])
+    title_col.subheader(f"🔬 {project['name']} — 行业研究报告")
+    if close_col.button("✕ 关闭", key="close_research"):
+        st.session_state.pop("research_project_id", None)
+        st.rerun()
+
+    def _do_generate(gen_key=None):
+        try:
+            with st.status("正在生成行研报告...", expanded=True) as status:
+                keyword = project.get("sub_sector") or project.get("sector") or project["name"]
+                st.write(f"从 IT桔子 搜索「{keyword}」同赛道公司...")
+                companies = scrape_sector_companies(keyword, browser_state)
+                st.write(f"找到 {len(companies)} 家同赛道公司，LLM 分析行业格局...")
+                research = generate_industry_research(project, companies)
+                upsert_project_research(db_path, pid, json.dumps(research, ensure_ascii=False))
+                status.update(label="行研报告生成完成", state="complete")
+        except Exception as e:
+            st.warning(f"行研报告生成失败：{e}")
+        if gen_key:
+            st.session_state.pop(gen_key, None)
+        st.rerun()
+
+    gen_key = f"research_generating_{pid}"
+    if not has_cache:
+        if st.session_state.get(gen_key):
+            st.info("报告生成中，请稍候...")
+            return
+        st.session_state[gen_key] = True
+        _do_generate(gen_key)
+        return
+
+    # --- Show cached report ---
+    research = {}
+    try:
+        research = json.loads(project.get("research_json") or "{}")
+    except Exception:
+        pass
+
+    gen_time = (project.get("research_generated_at") or "")[:16].replace("T", " ")
+
+    if regen_col.button("↺ 重新生成", key="regen_research"):
+        _do_generate(gen_key)
+        return
+
+    def _to_markdown(r: dict, name: str) -> str:
+        cl_rows = "\n".join(
+            f"| {c.get('name','')} | {c.get('type','')} | {c.get('note','')} |"
+            for c in (r.get("competitive_landscape") or [])
+        )
+        deals = r.get("financing_heat", {}).get("recent_deals") or []
+        deal_rows = "\n".join(
+            f"| {d.get('company','')} | {d.get('stage','')} | {d.get('amount','')} | {d.get('date','')} |"
+            for d in deals
+        )
+        return f"""# {name} — 行业研究报告
+
+*生成时间：{gen_time}*
+
+## 行业概述
+{r.get('industry_overview', '')}
+
+## 市场规模 & 趋势
+{r.get('market_size', '')}
+
+## 竞争格局
+| 公司名称 | 类型 | 简介 |
+|---------|------|------|
+{cl_rows}
+
+## 融资热度（近两年）
+{r.get('financing_heat', {}).get('summary', '')}
+
+| 公司 | 轮次 | 金额 | 时间 |
+|-----|------|------|------|
+{deal_rows}
+
+## 本项目定位
+{r.get('target_positioning', '')}
+"""
+
+    md_content = _to_markdown(research, project["name"])
+    export_col.download_button(
+        "📥 导出 MD",
+        data=md_content.encode("utf-8"),
+        file_name=f"{project['name']}_行研报告.md",
+        mime="text/markdown",
+        key="export_research",
+    )
+
+    st.caption(f"生成时间：{gen_time}")
+
+    st.markdown("#### 行业概述")
+    st.info(research.get("industry_overview") or "—")
+
+    st.markdown("#### 市场规模 & 趋势")
+    st.info(research.get("market_size") or "—")
+
+    st.markdown("#### 竞争格局")
+    cl = research.get("competitive_landscape") or []
+    if cl:
+        st.caption("数据来源：LLM + IT桔子")
+        st.dataframe(
+            pd.DataFrame(cl).rename(columns={"name": "公司名称", "type": "类型", "note": "简介"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.write("—")
+
+    st.markdown("#### 融资热度（近两年）")
+    fh = research.get("financing_heat") or {}
+    st.write(fh.get("summary") or "—")
+    deals = fh.get("recent_deals") or []
+    if deals:
+        st.dataframe(
+            pd.DataFrame(deals).rename(
+                columns={"company": "公司", "stage": "轮次", "amount": "金额", "date": "时间"}
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("#### 本项目定位")
+    st.success(research.get("target_positioning") or "—")
+
+
 st.title("📁 项目管理")
 
 with st.expander("➕ 上传新 BP", expanded=False):
@@ -164,7 +298,11 @@ with st.expander("➕ 上传新 BP", expanded=False):
                 text = ""
 
             with st.spinner("Claude 正在解析结构化信息..."):
-                info = extract_project_info(text) if text else {}
+                try:
+                    info = extract_project_info(text) if text else {}
+                except Exception as e:
+                    st.error(f"LLM 解析失败：{e}")
+                    info = {}
 
             # 把解析结果存入 session_state，避免表单提交时丢失
             st.session_state["bp_parsed"] = {
@@ -210,8 +348,8 @@ else:
     selected_id = st.session_state.get("selected_project_id")
 
     # 表头行（7列，与数据行完全一致）
-    COLS = [3, 2, 2, 1, 1, 1, 1]
-    h1, h2, h3, h4, _, _, _ = st.columns(COLS)
+    COLS = [3, 2, 2, 1, 1, 1, 1, 1]
+    h1, h2, h3, h4, _, _, _, _ = st.columns(COLS)
     h1.markdown("**项目名称**")
     h2.markdown("**赛道**")
     h3.markdown("**细分领域**")
@@ -221,7 +359,7 @@ else:
     confirm_del_id = st.session_state.get("confirm_delete_project_id")
 
     for p in projects:
-        col1, col2, col3, col4, col_report, col5, col6 = st.columns(COLS)
+        col1, col2, col3, col4, col_report, col_research, col5, col6 = st.columns(COLS)
         col1.markdown(f"**{p['name']}**")
         col2.write(p['sector'] or "—")
         col3.write(p['sub_sector'] or "—")
@@ -230,6 +368,13 @@ else:
         if col_report.button("📊", key=f"report_{p['id']}", help="生成项目报告"):
             st.session_state["report_project_id"] = p["id"]
             st.session_state.pop("selected_project_id", None)
+            st.session_state.pop("research_project_id", None)
+            st.rerun()
+
+        if col_research.button("🔬", key=f"research_{p['id']}", help="生成行研报告"):
+            st.session_state["research_project_id"] = p["id"]
+            st.session_state.pop("selected_project_id", None)
+            st.session_state.pop("report_project_id", None)
             st.rerun()
 
         if confirm_del_id == p["id"]:
@@ -309,3 +454,11 @@ else:
         if rp:
             st.divider()
             _render_report_panel(DB_PATH, rp, BROWSER_STATE)
+
+    # --- Research panel ---
+    research_pid = st.session_state.get("research_project_id")
+    if research_pid:
+        rp = get_project(DB_PATH, research_pid)
+        if rp:
+            st.divider()
+            _render_research_panel(DB_PATH, rp, BROWSER_STATE)
