@@ -1,6 +1,4 @@
 # tests/test_bp_parser.py
-import pytest
-from unittest.mock import patch, MagicMock
 from core.bp_parser import extract_text_from_pdf, extract_text_from_pptx, extract_project_info, extract_report_info
 
 def test_extract_text_from_pdf(tmp_path):

@@ -2,10 +2,8 @@
 import json
 import pytest
 from core.database import init_db, insert_project, get_project, list_projects, \
-    insert_institution, get_institution, list_institutions, \
-    insert_investment_record, list_investment_records, \
-    update_project, update_institution, delete_project, delete_institution, \
-    upsert_project_report, insert_funding_round, list_funding_rounds, \
+    insert_institution, get_institution, insert_investment_record, list_investment_records, \
+    update_project, update_institution, delete_project, upsert_project_report, insert_funding_round, list_funding_rounds, \
     delete_project_funding_rounds, upsert_project_research
 
 @pytest.fixture

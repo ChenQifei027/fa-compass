@@ -1,6 +1,4 @@
 # tests/test_enricher.py
-import pytest
-from unittest.mock import MagicMock
 from core.enricher import enrich_institution
 
 def test_enrich_institution_returns_required_fields(mocker):
