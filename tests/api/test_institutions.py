@@ -1,4 +1,6 @@
-import os, tempfile
+import os, tempfile, pytest
+from unittest.mock import patch
+
 _db = tempfile.mktemp(suffix=".db")
 os.environ["DB_PATH"] = _db
 
@@ -6,6 +8,11 @@ from fastapi.testclient import TestClient
 from api.main import app
 from core.database import init_db
 init_db(_db)
+
+@pytest.fixture(autouse=True)
+def mock_scraper():
+    with patch("api.routers.institutions.scrape_institution_investments", return_value={"institution": {}, "records": []}):
+        yield
 
 client = TestClient(app)
 

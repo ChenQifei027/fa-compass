@@ -181,6 +181,7 @@ def update_institution(db_path, institution_id, **kwargs):
 
 def delete_institution(db_path, institution_id):
     with _conn(db_path) as conn:
+        conn.execute("DELETE FROM investment_records WHERE institution_id = ?", (institution_id,))
         conn.execute("DELETE FROM institutions WHERE id = ?", (institution_id,))
 
 def insert_investment_record(db_path, **kwargs):
