@@ -185,7 +185,13 @@ def scrape_sector_companies(keyword: str, state_path: str) -> list:
         script = f"""
 import json, time
 {_inject_cookies_script(cookies)}
-ensure_real_tab()
+_orig_tab = current_tab()
+_tid = new_tab()
+def _cleanup():
+    try: cdp("Target.closeTarget", targetId=_tid)
+    except Exception: pass
+    try: switch_tab(_orig_tab)
+    except Exception: pass
 
 goto_url("https://www.itjuzi.com/search?data=" + {json.dumps(quote(keyword))})
 wait_for_network_idle(timeout=15)
@@ -198,6 +204,7 @@ wait_for_network_idle(timeout=8)
 
 links = js({js_company_links}) or []
 page_text = js({js_text}) or ""
+_cleanup()
 print(json.dumps({{"links": links, "page_text": page_text}}, ensure_ascii=False))
 """
         result = subprocess.run(
@@ -245,7 +252,13 @@ def scrape_company_funding(company_name: str, state_path: str) -> list:
         script = f"""
 import json, time, re
 {_inject_cookies_script(cookies)}
-ensure_real_tab()
+_orig_tab = current_tab()
+_tid = new_tab()
+def _cleanup():
+    try: cdp("Target.closeTarget", targetId=_tid)
+    except Exception: pass
+    try: switch_tab(_orig_tab)
+    except Exception: pass
 
 name = {json.dumps(company_name)}
 goto_url("https://www.itjuzi.com/search?data=" + {json.dumps(quote(company_name))})
@@ -267,6 +280,7 @@ if not detail_url and links:
         detail_url = "https://www.itjuzi.com" + href if href.startswith("/") else href
 
 if not detail_url:
+    _cleanup()
     print(json.dumps({{"rounds":[],"ok":False}}))
 else:
     goto_url(detail_url)
@@ -280,6 +294,7 @@ else:
     time.sleep(2)
 
     page_text = js({js_text}) or ""
+    _cleanup()
     print(json.dumps({{"rounds":[], "page_text": page_text, "ok":True}}, ensure_ascii=False))
 """
         result = subprocess.run(
@@ -370,7 +385,13 @@ def scrape_institution_investments(name: str, state_path: str) -> dict:
         script = f"""
 import json, time, re
 {_inject_cookies_script(cookies)}
-ensure_real_tab()
+_orig_tab = current_tab()
+_tid = new_tab()
+def _cleanup():
+    try: cdp("Target.closeTarget", targetId=_tid)
+    except Exception: pass
+    try: switch_tab(_orig_tab)
+    except Exception: pass
 
 # Step 1: 搜索机构
 name = {json.dumps(name)}
@@ -394,6 +415,7 @@ if not detail_url:
             break
 
 if not detail_url:
+    _cleanup()
     print(json.dumps({{"institution":{{}}, "records":[]}}))
 else:
     # Step 2: 详情页
@@ -456,6 +478,7 @@ else:
 
     # Step 7: 提取页面文本（含投资事件表格）
     page_text = js({js_text})
+    _cleanup()
     print(json.dumps({{"institution":inst_info,"page_text":(page_text or ""),"event_urls":event_urls,"dom_sectors":dom_sectors,"ok":True}}, ensure_ascii=False))
 """
         result = subprocess.run(
@@ -520,7 +543,13 @@ def scrape_event_description(event_url: str) -> str:
         script = f"""
 import json, time
 {_inject_cookies_script(cookies)}
-ensure_real_tab()
+_orig_tab = current_tab()
+_tid = new_tab()
+def _cleanup():
+    try: cdp("Target.closeTarget", targetId=_tid)
+    except Exception: pass
+    try: switch_tab(_orig_tab)
+    except Exception: pass
 goto_url({json.dumps(event_url)})
 wait_for_network_idle(timeout=15)
 time.sleep(2)
@@ -555,6 +584,7 @@ if not desc:
             desc = line
             break
 
+_cleanup()
 print(json.dumps({{"desc": desc}}, ensure_ascii=False))
 """
         result = subprocess.run(
@@ -585,6 +615,13 @@ def get_itjuzi_url(name: str) -> Optional[str]:
         script = f"""
 import time, re, json
 {_inject_cookies_script(cookies)}
+_orig_tab = current_tab()
+_tid = new_tab()
+def _cleanup():
+    try: cdp("Target.closeTarget", targetId=_tid)
+    except Exception: pass
+    try: switch_tab(_orig_tab)
+    except Exception: pass
 goto_url("https://www.itjuzi.com/search?data=" + {json.dumps(quote(name))})
 wait_for_network_idle(timeout=15)
 time.sleep(3)
@@ -597,6 +634,7 @@ for l in (links or []):
     if name in text and href.startswith("/investfirm/") and href[12:].isdigit():
         result = "https://www.itjuzi.com" + href
         break
+_cleanup()
 print(result or "")
 """
         r = subprocess.run([HARNESS_BIN, "-c", script], capture_output=True, text=True, timeout=60)

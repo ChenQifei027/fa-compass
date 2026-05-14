@@ -3,9 +3,10 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = init?.body instanceof FormData
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init
+    ...init,
+    headers: isFormData ? init?.headers : { 'Content-Type': 'application/json', ...init?.headers },
   })
   if (!res.ok) {
     const t = await res.text().catch(() => res.statusText)

@@ -365,36 +365,36 @@ else:
         col3.write(p['sub_sector'] or "—")
         col4.write(p['stage'] or "—")
 
-        if col_report.button("📊", key=f"report_{p['id']}", help="生成项目报告"):
+        if col_report.button("📊 报告", key=f"report_{p['id']}", help="生成项目报告"):
             st.session_state["report_project_id"] = p["id"]
             st.session_state.pop("selected_project_id", None)
             st.session_state.pop("research_project_id", None)
             st.rerun()
 
-        if col_research.button("🔬", key=f"research_{p['id']}", help="生成行研报告"):
+        if col_research.button("🔬 行研", key=f"research_{p['id']}", help="生成行研报告"):
             st.session_state["research_project_id"] = p["id"]
             st.session_state.pop("selected_project_id", None)
             st.session_state.pop("report_project_id", None)
             st.rerun()
 
         if confirm_del_id == p["id"]:
-            if col5.button("✅", key=f"delyes_{p['id']}", help="确认删除"):
+            if col5.button("✅ 确认", key=f"delyes_{p['id']}", help="确认删除"):
                 delete_project(DB_PATH, p["id"])
                 if st.session_state.get("selected_project_id") == p["id"]:
                     st.session_state.pop("selected_project_id", None)
                 st.session_state.pop("confirm_delete_project_id", None)
                 st.rerun()
-            if col6.button("❌", key=f"delno_{p['id']}", help="取消"):
+            if col6.button("❌ 取消", key=f"delno_{p['id']}", help="取消"):
                 st.session_state.pop("confirm_delete_project_id", None)
                 st.rerun()
             col1.caption("⚠️ 确认删除？")
         else:
-            if col5.button("详情", key=f"detail_{p['id']}"):
+            if col5.button("📄 详情", key=f"detail_{p['id']}"):
                 st.session_state["selected_project_id"] = p["id"]
                 st.session_state.pop("confirm_delete_project_id", None)
                 st.session_state.pop("report_project_id", None)
                 st.rerun()
-            if col6.button("🗑️", key=f"pdel_{p['id']}", help="删除此项目"):
+            if col6.button("🗑️ 删除", key=f"pdel_{p['id']}", help="删除此项目"):
                 st.session_state["confirm_delete_project_id"] = p["id"]
                 st.rerun()
         st.divider()

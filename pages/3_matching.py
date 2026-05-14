@@ -4,11 +4,11 @@ import streamlit as st
 from dotenv import load_dotenv
 from core.database import init_db, list_projects, get_project, \
     list_institutions, get_institution, list_investment_records
-from core.matcher import match_project_to_institutions, match_institution_to_projects
+from core.matcher import match_project_to_institutions, match_institution_to_projects, analyze_investment_records
+from core.llm import llm_is_configured
 
 load_dotenv()
 DB_PATH = os.getenv("DB_PATH", "data/fa_matching.db")
-from core.llm import llm_is_configured
 
 init_db(DB_PATH)
 
@@ -47,10 +47,16 @@ with col_left:
                 enriched = []
                 for inst in institutions:
                     records = list_investment_records(DB_PATH, inst["id"])
-                    summary = "、".join(
-                        f"{r['company_name']}({r['sector'] or ''})" for r in records[:10]
+                    analysis = analyze_investment_records(records)
+                    sample = "；".join(
+                        f"{r['company_name']}/{r.get('sector','')}/{r.get('stage','')}/{r.get('amount','')}"
+                        for r in records[:20]
                     )
-                    enriched.append({**inst, "investment_records_summary": summary})
+                    enriched.append({
+                        **inst,
+                        "portfolio_analysis": analysis,
+                        "investment_records_sample": sample,
+                    })
 
                 with st.spinner("AI 正在分析匹配度..."):
                     results = match_project_to_institutions(project, enriched)
@@ -87,10 +93,16 @@ with col_right:
         if st.button("🚀 开始推荐项目", type="primary", key="btn_i2p"):
             institution = get_institution(DB_PATH, selected_iid)
             records = list_investment_records(DB_PATH, selected_iid)
-            summary = "、".join(
-                f"{r['company_name']}({r['sector'] or ''})" for r in records[:10]
+            analysis = analyze_investment_records(records)
+            sample = "；".join(
+                f"{r['company_name']}/{r.get('sector','')}/{r.get('stage','')}/{r.get('amount','')}"
+                for r in records[:20]
             )
-            enriched_institution = {**institution, "investment_records_summary": summary}
+            enriched_institution = {
+                **institution,
+                "portfolio_analysis": analysis,
+                "investment_records_sample": sample,
+            }
             projects = list_projects(DB_PATH)
 
             if not projects:
@@ -101,8 +113,20 @@ with col_right:
 
                 st.session_state["i2p_results"] = results
                 st.session_state["i2p_inst_name"] = selected_inst_name
+                st.session_state["i2p_analysis"] = analysis
 
     if "i2p_results" in st.session_state:
+        analysis = st.session_state.get("i2p_analysis") or {}
+        if analysis:
+            with st.expander("📊 投资偏好画像", expanded=False):
+                col_a, col_b, col_c = st.columns(3)
+                col_a.metric("历史记录总数", analysis["total_count"])
+                col_b.metric("近2年活跃", f"{analysis['recent_2y_count']}笔")
+                col_c.metric("高频赛道Top1", (analysis["top_sectors"] or ["—"])[0])
+                if analysis["top_sectors"]:
+                    st.caption("高频赛道：" + " · ".join(analysis["top_sectors"]))
+                if analysis["top_stages"]:
+                    st.caption("高频轮次：" + " · ".join(analysis["top_stages"]))
         st.markdown(f"**「{st.session_state['i2p_inst_name']}」推荐项目：**")
         for r in st.session_state["i2p_results"]:
             level_color = {"高": "🟢", "中": "🟡", "低": "🔴"}.get(r.get("match_level", ""), "⚪")

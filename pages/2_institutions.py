@@ -2,16 +2,16 @@
 import os
 import streamlit as st
 import pandas as pd
-from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
 from core.database import init_db, insert_institution, list_institutions, get_institution, \
-    update_institution, delete_institution, insert_investment_record, list_investment_records
-from core.scraper import scrape_institution_investments
+    update_institution, delete_institution, insert_investment_record, list_investment_records, \
+    list_records_missing_desc, update_investment_record_desc
+from core.scraper import scrape_institution_investments, scrape_event_description
+from core.llm import llm_is_configured
 
 load_dotenv()
 DB_PATH = os.getenv("DB_PATH", "data/fa_matching.db")
-from core.llm import llm_is_configured
 BROWSER_STATE = os.getenv("BROWSER_STATE_PATH", "data/browser_state.json")
 
 init_db(DB_PATH)
@@ -45,15 +45,28 @@ with tab_add:
                     fa_fee_note=fa_fee_note, response_style=response_style,
                     track_updates=1 if track else 0
                 )
-                with st.spinner(f"正在从 IT桔子 抓取「{name}」的信息..."):
-                    result = scrape_institution_investments(name, BROWSER_STATE)
-                    inst_info = {k: v for k, v in result["institution"].items() if v}
-                    if inst_info:
-                        update_institution(DB_PATH, iid, **inst_info)
-                    for r in result["records"]:
-                        insert_investment_record(DB_PATH, institution_id=iid, **r)
-                    update_institution(DB_PATH, iid, last_scraped_at=datetime.now().isoformat())
-                st.success(f"机构「{name}」已添加，抓取到 {len(result['records'])} 条投资记录")
+                records_count = 0
+                scrape_error = None
+                try:
+                    with st.status(f"正在从 IT桔子 抓取「{name}」的信息...", expanded=True) as status:
+                        st.write("连接浏览器...")
+                        result = scrape_institution_investments(name, BROWSER_STATE)
+                        inst_info = {k: v for k, v in result["institution"].items() if v}
+                        if inst_info:
+                            update_institution(DB_PATH, iid, **inst_info)
+                            st.write("已更新机构基本信息")
+                        for r in result["records"]:
+                            insert_investment_record(DB_PATH, institution_id=iid, **r)
+                            records_count += 1
+                        update_institution(DB_PATH, iid, last_scraped_at=datetime.now().isoformat())
+                        status.update(label=f"抓取完成，获取 {records_count} 条投资记录", state="complete")
+                except Exception as e:
+                    scrape_error = str(e)
+                if scrape_error:
+                    st.warning(f"机构「{name}」已添加，但 IT桔子 抓取失败：{scrape_error}")
+                else:
+                    st.success(f"机构「{name}」已添加，抓取到 {records_count} 条投资记录")
+                st.session_state["selected_institution_id"] = iid
                 st.rerun()
 
 with tab_import:
@@ -87,18 +100,25 @@ with tab_list:
         col_refresh, col_info = st.columns([1, 3])
         if col_refresh.button(f"🔄 全量刷新（{len(tracked)} 家）"):
             progress = st.progress(0)
+            errors = []
             for idx, inst in enumerate(tracked):
-                with st.spinner(f"正在抓取「{inst['name']}」的信息..."):
-                    result = scrape_institution_investments(inst["name"], BROWSER_STATE)
-                    inst_info = {k: v for k, v in result["institution"].items() if v}
-                    if inst_info:
-                        update_institution(DB_PATH, inst["id"], **inst_info)
-                    for r in result["records"]:
-                        insert_investment_record(DB_PATH, institution_id=inst["id"], **r)
-                    update_institution(DB_PATH, inst["id"],
-                                       last_scraped_at=datetime.now().isoformat())
+                try:
+                    with st.spinner(f"正在抓取「{inst['name']}」的信息..."):
+                        result = scrape_institution_investments(inst["name"], BROWSER_STATE)
+                        inst_info = {k: v for k, v in result["institution"].items() if v}
+                        if inst_info:
+                            update_institution(DB_PATH, inst["id"], **inst_info)
+                        for r in result["records"]:
+                            insert_investment_record(DB_PATH, institution_id=inst["id"], **r)
+                        update_institution(DB_PATH, inst["id"],
+                                           last_scraped_at=datetime.now().isoformat())
+                except Exception as e:
+                    errors.append(f"{inst['name']}: {e}")
                 progress.progress((idx + 1) / len(tracked))
-            st.success("全量刷新完成")
+            if errors:
+                st.warning(f"全量刷新完成，{len(errors)} 家失败：" + "；".join(errors))
+            else:
+                st.success("全量刷新完成")
             st.rerun()
         last_times = [i["last_scraped_at"] for i in tracked if i.get("last_scraped_at")]
         if last_times:
@@ -109,21 +129,63 @@ with tab_list:
     else:
         selected_iid = st.session_state.get("selected_institution_id")
 
+        def _compact_tags(val: str, n: int = 4) -> str:
+            if not val:
+                return "—"
+            tags = [t.strip() for t in val.split(",") if t.strip()]
+            if len(tags) <= n:
+                return " · ".join(tags)
+            return " · ".join(tags[:n]) + f" +{len(tags) - n}"
+
+        # 表头行（与数据行完全相同的列宽）
+        COLS = [3, 2, 3, 2, 1, 1]
+        h1, h2, h3, h4, _, _ = st.columns(COLS, gap="small")
+        h1.markdown("**机构名称**")
+        h2.markdown("**管理规模**")
+        h3.markdown("**关注领域**")
+        h4.markdown("**投资轮次**")
+        st.divider()
+
+        confirm_del_id = st.session_state.get("confirm_delete_institution_id")
+
         for inst in institutions:
-            with st.container(border=True):
-                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-                col1.markdown(f"**{inst['name']}**")
-                col2.text(inst.get("aum") or "规模未知")
-                col3.text(inst.get("preferred_sectors") or "偏好未知")
-                if col4.button("详情", key=f"idetail_{inst['id']}"):
-                    st.session_state["selected_institution_id"] = inst["id"]
+            col1, col2, col3, col4, col5, col6 = st.columns(COLS, gap="small")
+            col1.markdown(f"**{inst['name']}**")
+            col2.write(inst.get("aum") or "—")
+            col3.write(_compact_tags(inst.get("preferred_sectors")))
+            col4.write(_compact_tags(inst.get("preferred_stages")))
+
+            if confirm_del_id == inst["id"]:
+                if col5.button("✅", key=f"delyes_{inst['id']}", help="确认删除"):
+                    delete_institution(DB_PATH, inst["id"])
+                    if st.session_state.get("selected_institution_id") == inst["id"]:
+                        st.session_state.pop("selected_institution_id", None)
+                    st.session_state.pop("confirm_delete_institution_id", None)
                     st.rerun()
+                if col6.button("❌", key=f"delno_{inst['id']}", help="取消"):
+                    st.session_state.pop("confirm_delete_institution_id", None)
+                    st.rerun()
+                col1.caption("⚠️ 确认删除？")
+            else:
+                if col5.button("详情", key=f"idetail_{inst['id']}"):
+                    st.session_state["selected_institution_id"] = inst["id"]
+                    st.session_state.pop("confirm_delete_institution_id", None)
+                    st.rerun()
+                if col6.button("🗑️", key=f"idel_{inst['id']}", help="删除此机构"):
+                    st.session_state["confirm_delete_institution_id"] = inst["id"]
+                    st.rerun()
+            st.divider()
 
         if selected_iid:
             inst = get_institution(DB_PATH, selected_iid)
             if inst:
                 st.divider()
-                st.subheader(f"🏦 {inst['name']} — 详情")
+                title_col, close_col = st.columns([5, 1])
+                title_col.subheader(f"🏦 {inst['name']} — 详情")
+                if close_col.button("✕ 关闭", key="close_detail"):
+                    st.session_state.pop("selected_institution_id", None)
+                    st.session_state.pop("confirm_delete_detail", None)
+                    st.rerun()
 
                 detail_tab1, detail_tab2 = st.tabs(["基本信息", "投资记录"])
 
@@ -160,36 +222,68 @@ with tab_list:
                             st.rerun()
 
                     col_del, col_match = st.columns(2)
-                    if col_del.button("🗑️ 删除机构", type="secondary"):
-                        delete_institution(DB_PATH, selected_iid)
-                        st.session_state.pop("selected_institution_id", None)
-                        st.rerun()
+                    if st.session_state.get("confirm_delete_detail") == selected_iid:
+                        col_del.warning("确认删除此机构及其所有投资记录？")
+                        c1, c2 = st.columns(2)
+                        if c1.button("✅ 确认删除", type="secondary"):
+                            delete_institution(DB_PATH, selected_iid)
+                            st.session_state.pop("selected_institution_id", None)
+                            st.session_state.pop("confirm_delete_detail", None)
+                            st.rerun()
+                        if c2.button("❌ 取消"):
+                            st.session_state.pop("confirm_delete_detail", None)
+                            st.rerun()
+                    else:
+                        if col_del.button("🗑️ 删除机构", type="secondary"):
+                            st.session_state["confirm_delete_detail"] = selected_iid
+                            st.rerun()
                     if col_match.button("🔗 找匹配项目", type="primary"):
                         st.session_state["match_institution_id"] = selected_iid
                         st.switch_page("pages/3_matching.py")
 
                 with detail_tab2:
                     records = list_investment_records(DB_PATH, selected_iid)
-                    col_rec, col_scrape = st.columns([3, 1])
+                    col_rec, col_scrape, col_desc = st.columns([2, 1, 1])
                     col_rec.text(f"已记录 {len(records)} 条投资记录")
                     if col_scrape.button("🔄 刷新记录"):
-                        with st.spinner("正在从 IT桔子 抓取..."):
-                            result = scrape_institution_investments(inst["name"], BROWSER_STATE)
-                            inst_info = {k: v for k, v in result["institution"].items() if v}
-                            if inst_info:
-                                update_institution(DB_PATH, selected_iid, **inst_info)
-                            for r in result["records"]:
-                                insert_investment_record(DB_PATH, institution_id=selected_iid, **r)
-                            update_institution(DB_PATH, selected_iid,
-                                               last_scraped_at=datetime.now().isoformat())
-                        st.success(f"抓取完成，新增 {len(result['records'])} 条")
+                        new_count = 0
+                        scrape_err = None
+                        try:
+                            with st.status("正在从 IT桔子 抓取...", expanded=True) as status:
+                                result = scrape_institution_investments(inst["name"], BROWSER_STATE)
+                                inst_info = {k: v for k, v in result["institution"].items() if v}
+                                if inst_info:
+                                    update_institution(DB_PATH, selected_iid, **inst_info)
+                                for r in result["records"]:
+                                    insert_investment_record(DB_PATH, institution_id=selected_iid, **r)
+                                    new_count += 1
+                                update_institution(DB_PATH, selected_iid,
+                                                   last_scraped_at=datetime.now().isoformat())
+                                status.update(label=f"抓取完成，新增 {new_count} 条", state="complete")
+                        except Exception as e:
+                            scrape_err = str(e)
+                        if scrape_err:
+                            st.warning(f"抓取失败：{scrape_err}")
+                        else:
+                            st.success(f"抓取完成，新增 {new_count} 条")
+                        st.rerun()
+
+                    missing = list_records_missing_desc(DB_PATH, selected_iid)
+                    if col_desc.button(f"🔍 补全简介（{len(missing)}）", disabled=len(missing) == 0):
+                        progress = st.progress(0)
+                        for idx, rec in enumerate(missing):
+                            desc = scrape_event_description(rec["event_url"])
+                            if desc:
+                                update_investment_record_desc(DB_PATH, rec["id"], desc)
+                            progress.progress((idx + 1) / len(missing))
+                        st.success(f"已补全 {len(missing)} 条公司简介")
                         st.rerun()
 
                     if records:
                         df_records = pd.DataFrame(records)
-                        st.dataframe(
-                            df_records[["company_name", "sector", "stage", "amount", "invested_date"]],
-                            use_container_width=True
-                        )
+                        display_cols = ["company_name", "sector", "stage", "amount",
+                                        "invested_date", "company_desc"]
+                        show_cols = [c for c in display_cols if c in df_records.columns]
+                        st.dataframe(df_records[show_cols], use_container_width=True)
                     else:
                         st.info("暂无投资记录，点击「刷新记录」从 IT桔子 获取")

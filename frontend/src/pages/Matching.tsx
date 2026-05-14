@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
-import { projectsApi, Project } from '../api/projects'
-import { institutionsApi, Institution } from '../api/institutions'
-import { matchingApi, MatchResult } from '../api/matching'
+import { projectsApi } from '../api/projects'
+import { institutionsApi } from '../api/institutions'
+import { matchingApi } from '../api/matching'
+import type { Project } from '../api/projects'
+import type { Institution } from '../api/institutions'
+import type { MatchResult } from '../api/matching'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
 

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
-import { settingsApi, Settings } from '../api/settings'
+import { settingsApi } from '../api/settings'
+import type { Settings as SettingsData } from '../api/settings'
 import Spinner from '../components/Spinner'
 
 const inp: React.CSSProperties = { flex:1, background:'var(--bg-elevated)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 10px', color:'var(--text-primary)', fontSize:12 }
 const ghostBtn: React.CSSProperties = { background:'transparent', color:'var(--text-secondary)', border:'1px solid var(--border)', borderRadius:6, padding:'7px 14px', fontSize:12, cursor:'pointer' }
 
 export default function Settings() {
-  const [settings, setSettings] = useState<Settings|null>(null)
+  const [settings, setSettings] = useState<SettingsData|null>(null)
   const [form, setForm] = useState({ anthropic_api_key:'', model:'' })
   const [verifying, setVerifying] = useState(false)
   const [verified, setVerified] = useState<boolean|null>(null)

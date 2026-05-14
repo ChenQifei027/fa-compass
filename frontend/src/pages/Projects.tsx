@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { projectsApi, Project, ParsedBP } from '../api/projects'
+import { projectsApi } from '../api/projects'
+import type { Project, ParsedBP } from '../api/projects'
 import { pollJob } from '../api/jobs'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'

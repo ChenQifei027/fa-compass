@@ -12,10 +12,24 @@ export interface Institution {
   fa_fee_note: string
   response_style: string
   track_updates: number
-  website: string
-  founded_year: string
-  aum: string
-  key_partners: string
+  website: string | null
+  founded_year: string | null
+  aum: string | null
+  key_partners: string | null
+  last_scraped_at: string | null
+  updated_at: string | null
+}
+
+export interface InvestmentRecord {
+  id: number
+  institution_id: number
+  company_name: string
+  sector: string
+  stage: string
+  amount: string
+  invested_date: string
+  event_url: string | null
+  company_desc: string | null
 }
 
 export const institutionsApi = {
@@ -37,8 +51,16 @@ export const institutionsApi = {
     apiFetch<{ job_id: string }>(`/api/institutions/${id}/scrape`, {
       method: 'POST'
     }),
+  scrapeAll: () =>
+    apiFetch<{ job_id: string }>('/api/institutions/scrape-all', {
+      method: 'POST'
+    }),
   records: (id: number) =>
-    apiFetch<unknown[]>(`/api/institutions/${id}/records`),
+    apiFetch<InvestmentRecord[]>(`/api/institutions/${id}/records`),
+  fillDescs: (id: number) =>
+    apiFetch<{ job_id: string }>(`/api/institutions/${id}/fill-descs`, {
+      method: 'POST'
+    }),
   importExcel: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
