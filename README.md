@@ -212,6 +212,25 @@ fa-matching/
 
 ---
 
+## 支持项目
+
+如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
+
+<div align="center">
+<table>
+<tr>
+<td align="center"><b>微信</b></td>
+<td align="center"><b>支付宝</b></td>
+</tr>
+<tr>
+<td><img src="docs/donate/wechat.jpg" width="200" /></td>
+<td><img src="docs/donate/alipay.jpg" width="200" /></td>
+</tr>
+</table>
+</div>
+
+---
+
 ## License
 
 [MIT](LICENSE)
