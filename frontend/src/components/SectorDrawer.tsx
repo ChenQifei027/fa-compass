@@ -21,7 +21,6 @@ export default function SectorDrawer({ sectorName, onClose, onJumpTo }: DrawerPr
 
   useEffect(() => {
     let cancelled = false
-    setState({ kind: 'loading' })
     cancelPoll.current?.()
 
     sectorsApi.get(sectorName).then(hit => {
