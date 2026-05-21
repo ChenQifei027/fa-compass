@@ -4,6 +4,7 @@ import type { Institution, InvestmentRecord } from '../api/institutions'
 import { pollJob } from '../api/jobs'
 import Badge from '../components/Badge'
 import Spinner from '../components/Spinner'
+import SectorDrawer, { ClickableSectorBadge } from '../components/SectorDrawer'
 
 type Tab = 'list' | 'add' | 'import'
 type DetailTab = 'info' | 'records'
@@ -25,6 +26,7 @@ export default function Institutions() {
   const [scraping, setScraping] = useState<Record<number, boolean>>({})
   const [scrapingAll, setScrapingAll] = useState(false)
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [openSector, setOpenSector] = useState<string | null>(null)
 
   const reload = useCallback(() =>
     institutionsApi.list().then(setInstitutions).finally(() => setLoading(false))
@@ -66,7 +68,9 @@ export default function Institutions() {
         {tabBtn('list', '机构列表')}{tabBtn('add', '新增机构')}{tabBtn('import', '导入 Excel')}
       </div>
 
-      {tab === 'list' && <>
+      {tab === 'list' && (
+        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center' }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索机构名称…"
             style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 12px', color: 'var(--text-primary)', fontSize: 12, width: 220 }} />
@@ -99,7 +103,7 @@ export default function Institutions() {
                   <td style={{ padding: '11px 12px', maxWidth: 200 }}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
                       {(inst.preferred_sectors || '').split(',').filter(Boolean).slice(0, 5).map(s => (
-                        <Badge key={s} variant="blue">{s.trim()}</Badge>
+                        <ClickableSectorBadge key={s.trim()} name={s.trim()} onClick={setOpenSector} />
                       ))}
                       {(inst.preferred_sectors || '').split(',').filter(Boolean).length > 5 && (
                         <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>+{(inst.preferred_sectors || '').split(',').filter(Boolean).length - 5}</span>
@@ -146,7 +150,17 @@ export default function Institutions() {
             onDeleted={() => { setSelectedId(null); reload() }}
           />
         )}
-      </>}
+          </div>
+          {openSector && (
+            <SectorDrawer
+              key={openSector}
+              sectorName={openSector}
+              onClose={() => setOpenSector(null)}
+              onJumpTo={(n) => setOpenSector(n)}
+            />
+          )}
+        </div>
+      )}
 
       {tab === 'add' && <AddForm onSaved={() => { setTab('list'); reload() }} />}
       {tab === 'import' && <ImportForm onSaved={() => { setTab('list'); reload() }} />}
